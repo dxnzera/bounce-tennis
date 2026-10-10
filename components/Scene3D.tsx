@@ -1,10 +1,11 @@
 'use client';
-import { Component, Suspense, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { Component, Suspense, useEffect, useMemo, useRef, type ComponentRef, type ReactNode } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { ContactShadows, OrbitControls, useGLTF } from '@react-three/drei';
 import { Box3, Group, Mesh, Vector3, SRGBColorSpace } from 'three';
 import type { Product } from '@/lib/products';
 import type { HeroMotion } from '@/lib/animations/hero';
+import { HERO_BALL_SIZE, HERO_RACKET_SIZE } from '@/lib/animations/hero-framing';
 import { useReducedMotion, useResponsive, useRenderBudget } from '@/hooks/useExperience';
 
 function useNormalizedGLB(path: string, rotation: [number, number, number], size: number) {
@@ -31,6 +32,10 @@ function GLB({ path, rotation = [0, 0, 0], size = 1 }: { path: string; rotation?
   return <primitive object={model} dispose={null} />;
 }
 
+export function preloadModels(paths: string[]) {
+  paths.forEach(path => useGLTF.preload(path));
+}
+
 class SceneBoundary extends Component<{ children: ReactNode; fallback?: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
@@ -46,7 +51,7 @@ function Lighting() {
   </>;
 }
 
-function HeroObjects({ motion, loadRacket, onReady }: { motion: HeroMotion; loadRacket: boolean; onReady: (invalidate: () => void) => void }) {
+function HeroObjects({ motion, onReady }: { motion: HeroMotion; onReady: (invalidate: () => void) => void }) {
   const ball = useRef<Group>(null);
   const racket = useRef<Group>(null);
   const { camera, invalidate } = useThree();
@@ -59,6 +64,7 @@ function HeroObjects({ motion, loadRacket, onReady }: { motion: HeroMotion; load
     }
     if (racket.current) {
       racket.current.position.set(motion.racketX, motion.racketY, motion.racketZ);
+      racket.current.scale.setScalar(motion.racketScale);
       racket.current.rotation.set(0.1, -0.22, motion.racketRotation);
     }
     camera.position.z = motion.cameraZ;
@@ -67,42 +73,76 @@ function HeroObjects({ motion, loadRacket, onReady }: { motion: HeroMotion; load
   });
   return <>
     <Lighting />
-    <Suspense fallback={null}><group ref={ball}><GLB path="/models/tennis-ball.glb" size={1.65} /></group></Suspense>
-    {loadRacket && <Suspense fallback={null}><group ref={racket}><GLB path="/models/wilson-blade-team.glb" rotation={[Math.PI / 2, 0, 0]} size={3.3} /></group></Suspense>}
+    <Suspense fallback={null}><group ref={ball}><GLB path="/models/tennis-ball.glb" size={HERO_BALL_SIZE} /></group></Suspense>
+    <Suspense fallback={null}><group ref={racket}><GLB path="/models/wilson-blade-team.glb" rotation={[Math.PI / 2, 0, 0]} size={HERO_RACKET_SIZE} /></group></Suspense>
   </>;
 }
 
-export function HeroCanvas({ motion, loadRacket, onReady }: { motion: HeroMotion; loadRacket: boolean; onReady: (invalidate: () => void) => void }) {
+export function HeroCanvas({ motion, onReady }: { motion: HeroMotion; onReady: (invalidate: () => void) => void }) {
   const mobile = useResponsive();
   const budget = useRenderBudget();
+  useEffect(() => {
+    useGLTF.preload('/models/tennis-ball.glb');
+    useGLTF.preload('/models/wilson-blade-team.glb');
+  }, []);
   return <SceneBoundary fallback={<div className="scene-error">Explore a seleção Bounce abaixo.</div>}>
     <Canvas camera={{ position: [0, 0, 7.5], fov: mobile ? 48 : 36 }} dpr={[1, budget]} frameloop="demand" gl={{ antialias: true, alpha: true, powerPreference: 'low-power' }} onCreated={({ gl }) => { gl.outputColorSpace = SRGBColorSpace; }}>
-      <HeroObjects motion={motion} loadRacket={loadRacket} onReady={onReady} />
+      <HeroObjects motion={motion} onReady={onReady} />
     </Canvas>
   </SceneBoundary>;
 }
 
-function ProductObject({ product, reduced, visible, rotationOffset }: { product: Product; reduced: boolean; visible: boolean; rotationOffset: number }) {
+function ProductObject({ product, reduced, visible, rotationOffset, centered }: { product: Product; reduced: boolean; visible: boolean; rotationOffset: number; centered: boolean }) {
   const model = useRef<Group>(null);
   const { pointer } = useThree();
   useFrame((_, delta) => {
+    if (model.current && centered) {
+      model.current.rotation.set(0, rotationOffset, 0);
+      return;
+    }
     if (model.current && !reduced && visible) {
       model.current.rotation.y = rotationOffset - 0.17 + Math.sin(_.clock.elapsedTime * 0.28) * 0.06;
       model.current.rotation.x += (pointer.y * 0.09 - model.current.rotation.x) * Math.min(delta * 3, 1);
       model.current.rotation.z += (-0.12 + pointer.x * 0.08 - model.current.rotation.z) * Math.min(delta * 3, 1);
     }
   });
-  return <group ref={model} rotation={[0, rotationOffset - 0.17, -0.12]}><GLB path={product.model} rotation={product.rotation} size={4.1} /></group>;
+  return <group ref={model} rotation={[0, rotationOffset - (centered ? 0 : 0.17), centered ? 0 : -0.12]}><GLB path={product.model} rotation={product.rotation} size={4.1} /></group>;
 }
 
-export function ProductCanvas({ product, visible = true, rotationOffset = 0 }: { product: Product; visible?: boolean; rotationOffset?: number }) {
+export type SceneCommand = { id: number; action: 'zoom-in' | 'zoom-out' | 'reset' };
+
+function ProductControls({ interactive, command }: { interactive: boolean; command?: SceneCommand }) {
+  const mobile = useResponsive();
+  const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
+  const { camera, invalidate } = useThree();
+  useEffect(() => {
+    if (!command || !controls.current) return;
+    if (command.action === 'reset') {
+      const damping = controls.current.enableDamping;
+      controls.current.enableDamping = false;
+      controls.current.reset();
+      controls.current.reset();
+      controls.current.enableDamping = damping;
+    }
+    else {
+      const offset = camera.position.clone().sub(controls.current.target);
+      const distance = Math.max(4.2, Math.min(13, offset.length() * (command.action === 'zoom-in' ? 0.82 : 1.22)));
+      camera.position.copy(controls.current.target).add(offset.setLength(distance));
+      controls.current.update();
+    }
+    invalidate();
+  }, [command, camera, invalidate]);
+  return <OrbitControls ref={controls} makeDefault enableZoom={interactive || mobile} zoomSpeed={0.65} minDistance={4.2} maxDistance={13} enablePan={false} enableDamping dampingFactor={0.09} rotateSpeed={0.65} minPolarAngle={0.55} maxPolarAngle={Math.PI - 0.55} />;
+}
+
+export function ProductCanvas({ product, visible = true, rotationOffset = 0, interactive = false, centered = false, command }: { product: Product; visible?: boolean; rotationOffset?: number; interactive?: boolean; centered?: boolean; command?: SceneCommand }) {
   const budget = useRenderBudget();
   const reduced = useReducedMotion();
   return <SceneBoundary fallback={<p className="scene-error">A visualização 3D não está disponível neste dispositivo. As informações do produto continuam acessíveis.</p>}>
     <Canvas camera={{ position: [0, 0, 8.4], fov: 34 }} dpr={[1, budget]} frameloop={!visible ? 'never' : reduced ? 'demand' : 'always'} gl={{ antialias: true, alpha: true, powerPreference: 'low-power' }}>
       <Lighting />
-      <Suspense fallback={null}><ProductObject product={product} reduced={reduced} visible={visible} rotationOffset={rotationOffset} /><ContactShadows position={[0, -2.25, 0]} opacity={0.16} scale={8} blur={2.8} far={5} resolution={128} frames={1} color="#183C32" /></Suspense>
-      <OrbitControls makeDefault enableZoom={false} enablePan={false} enableDamping dampingFactor={0.09} rotateSpeed={0.65} minPolarAngle={0.55} maxPolarAngle={Math.PI - 0.55} />
+      <Suspense fallback={null}><ProductObject product={product} reduced={reduced} visible={visible} rotationOffset={rotationOffset} centered={centered} /><ContactShadows position={[0, -2.25, 0]} opacity={0.16} scale={8} blur={2.8} far={5} resolution={128} frames={1} color="#183C32" /></Suspense>
+      <ProductControls interactive={interactive} command={command} />
     </Canvas>
   </SceneBoundary>;
 }

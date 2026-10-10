@@ -1,42 +1,104 @@
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import { Euler, Vector3 } from 'three';
+import { fitHeroFrame, HERO_BALL_SIZE, HERO_INITIAL_Y, HERO_RACKET_SIZE, HERO_READY_ANGLE, type HeroFraming } from './hero-framing';
 gsap.registerPlugin(ScrollTrigger);
+
+const HERO_CONTACT_TIME = 0.37;
+const HERO_DURATION = 0.64;
+const contactDiameter = 0.4 * HERO_RACKET_SIZE / 4.1;
 
 export type HeroMotion = {
   ballX: number; ballY: number; ballZ: number; ballScale: number; spin: number;
-  racketX: number; racketY: number; racketZ: number; racketRotation: number;
+  racketX: number; racketY: number; racketZ: number; racketRotation: number; racketScale: number;
   cameraZ: number; shake: number; progress: number;
 };
-export const initialHeroMotion = (): HeroMotion => ({
-  ballX: 1.65, ballY: 0.1, ballZ: -1, ballScale: 0.85, spin: 0,
-  racketX: 5, racketY: -1.6, racketZ: -0.5, racketRotation: -0.75,
-  cameraZ: 7.5, shake: 0, progress: 0,
-});
+export function initialHeroMotion(narrow = false, framing?: HeroFraming, mobile = narrow): HeroMotion {
+  const scale = framing?.scale ?? 1;
+  const racketX = framing?.initialX ?? (narrow ? 1.1 : 2.4);
+  const racketY = framing?.initialY ?? HERO_INITIAL_Y;
+  const center = stringCenter(racketX, racketY, scale);
+  return {
+    ballX: center.x + (narrow ? 0.8 : -0.35) * scale, ballY: mobile ? 0.05 : 1.5,
+    ballZ: 0.25, ballScale: 0.75 * scale, spin: 0,
+    racketX, racketY, racketZ: -0.5, racketRotation: HERO_READY_ANGLE, racketScale: scale,
+    cameraZ: 7.5, shake: 0, progress: 0,
+  };
+}
 
-export function animateHero(element: HTMLElement, motion: HeroMotion, invalidate: () => void, loadRacket: () => void) {
+function stringCenter(x: number, y: number, scale: number) {
+  // Center of Object_5 (strings), measured in the centered, unit-height GLB.
+  return new Vector3(0, 1.01315 / 4.1, -0.0000733 / 4.1).multiplyScalar(HERO_RACKET_SIZE * scale)
+    .applyEuler(new Euler(0.1, -0.22, HERO_READY_ANGLE)).add(new Vector3(x, y, -0.5));
+}
+
+function contactPoint(framing: HeroFraming) {
+  const normal = new Vector3(0, 0, 1).applyEuler(new Euler(0.1, -0.22, HERO_READY_ANGLE));
+  return stringCenter(framing.hitX, framing.contactY, framing.scale).addScaledVector(normal, contactDiameter * framing.scale / 2);
+}
+
+export function animateHero(element: HTMLElement, motion: HeroMotion, invalidate: () => void) {
   const mm = gsap.matchMedia();
-  mm.add({ desktop: '(min-width: 768px)', mobile: '(max-width: 767px)', reduce: '(prefers-reduced-motion: reduce)' }, context => {
-    const { mobile, reduce } = context.conditions!;
-    if (reduce) return;
-    const timeline = gsap.timeline({ scrollTrigger: {
-      id: 'hero-intro', trigger: element, start: 'top top', end: `+=${mobile ? 1600 : 2300}`, pin: true,
-      scrub: 0.6, invalidateOnRefresh: true,
-      onUpdate: self => { motion.progress = self.progress; if (self.progress > 0.12) loadRacket(); invalidate(); },
-    }, defaults: { ease: 'none' }, onUpdate: invalidate });
+  mm.add({ desktop: '(min-width: 768px)', mobile: '(max-width: 767px)', compact: '(min-width: 768px) and (max-width: 1100px)', reduce: '(prefers-reduced-motion: reduce)' }, context => {
+    const { mobile, compact, reduce } = context.conditions!;
+    const narrow = !!(mobile || compact);
+    const measure = () => fitHeroFrame(element.querySelector<HTMLElement>('.hero-scene')!.getBoundingClientRect(), window.innerWidth, !!mobile);
+    let framing = measure();
+    const initial = () => initialHeroMotion(narrow, framing, !!mobile);
+    const hit = () => contactPoint(framing);
+    Object.assign(motion, initial());
+    invalidate();
+    if (reduce) {
+      const update = () => { framing = measure(); Object.assign(motion, initial()); invalidate(); };
+      if (mobile) {
+        const observer = new ResizeObserver(update);
+        observer.observe(element.querySelector<HTMLElement>('.hero-scene')!);
+        return () => observer.disconnect();
+      }
+      window.addEventListener('resize', update);
+      return () => window.removeEventListener('resize', update);
+    }
+    let timeline: gsap.core.Timeline | undefined;
+    timeline = gsap.timeline({ scrollTrigger: {
+      id: 'hero-intro', trigger: element, start: 'top top', end: `+=${mobile ? 950 : 1400}`, pin: true,
+      scrub: 0.4, invalidateOnRefresh: true,
+      onRefreshInit: () => { framing = measure(); },
+      onRefresh: self => {
+        framing = measure();
+        timeline?.invalidate().totalProgress(self.progress, true);
+        invalidate();
+      },
+      onUpdate: self => { motion.progress = self.progress; invalidate(); },
+    }, defaults: { ease: 'none' }, onUpdate: () => {
+      motion.racketX = framing.clampX(motion.racketX, motion.racketRotation, motion.cameraZ);
+      invalidate();
+    } });
     timeline
-      .to(motion, { ballX: -0.45, ballY: 0.7, ballZ: -0.4, ballScale: 1.05, spin: 2.8, duration: 0.28 }, 0)
-      .to(motion, { racketX: 1.85, racketY: -0.95, racketRotation: -0.45, duration: 0.24 }, 0.2)
-      .to(motion, { ballX: 1.45, ballY: -0.08, ballZ: 0, ballScale: 0.9, spin: 6, duration: 0.22 }, 0.28)
-      .to(motion, { racketRotation: 0.7, racketX: 1.4, duration: 0.06 }, 0.48)
-      .to(motion, { shake: 0.035, duration: 0.025 }, 0.5)
-      .to(motion, { shake: 0, racketRotation: 0.5, duration: 0.07 }, 0.54)
-      .to(motion, { ballX: mobile ? 0 : -0.3, ballY: 0.05, ballZ: 5.5, ballScale: 2.6, spin: 10, cameraZ: 7.8, duration: 0.23 }, 0.5)
-      .to(motion, { ballZ: 10, ballScale: 4.8, spin: 13, duration: 0.11 }, 0.73)
-      .to('.hero-copy, .hero-side, .hero-bottom, .ball-ground', { opacity: 0, y: -25, duration: 0.18 }, 0.12)
-      .to('.impact-flash', { opacity: 0.18, duration: 0.025 }, 0.5)
-      .to('.impact-flash', { opacity: 0, duration: 0.07 }, 0.525)
-      .fromTo('.hero-reveal', { clipPath: 'inset(100% 0 0 0)' }, { clipPath: 'inset(0% 0 0 0)', duration: 0.22 }, 0.75)
-      .fromTo('.hero-reveal-content > *', { opacity: 0, y: 45 }, { opacity: 1, y: 0, stagger: 0.04, duration: 0.15 }, 0.83);
+      .fromTo(motion, { ballX: () => initial().ballX, ballY: () => initial().ballY, ballZ: () => initial().ballZ, ballScale: () => initial().ballScale, spin: 0 },
+        { ballX: () => hit().x, ballY: () => hit().y, ballZ: () => hit().z, ballScale: () => contactDiameter * framing.scale / HERO_BALL_SIZE,
+          spin: 5, duration: HERO_CONTACT_TIME, ease: 'power1.in' }, 0)
+      .fromTo(motion, { racketX: () => framing.initialX, racketY: () => framing.initialY, racketRotation: HERO_READY_ANGLE, racketScale: () => framing.scale },
+        { racketX: () => framing.windupX, racketRotation: 95 * Math.PI / 180, racketScale: () => framing.scale, duration: 0.19, ease: 'power2.inOut' }, 0)
+      .to(motion, { racketX: () => framing.hitX, racketY: () => framing.contactY, racketRotation: HERO_READY_ANGLE, duration: 0.13, ease: 'power2.in' }, HERO_CONTACT_TIME - 0.13)
+      .to(motion, { shake: 0.02, duration: 0.02 }, HERO_CONTACT_TIME)
+      .to(motion, { shake: 0, racketRotation: 45 * Math.PI / 180, racketX: () => framing.followX, duration: 0.13, ease: 'power2.out' }, HERO_CONTACT_TIME + 0.02)
+      .fromTo(motion, { cameraZ: 7.5 }, { ballX: mobile ? 0.15 : narrow ? 1.2 : -0.3, ballY: 0.1, ballZ: 5.5, ballScale: () => 1.65 * framing.scale,
+        spin: 9, cameraZ: 7.8, duration: 0.19, ease: 'power2.in', immediateRender: false }, HERO_CONTACT_TIME)
+      .to(motion, { ballZ: 10, ballScale: () => 3.8 * framing.scale, spin: 12, duration: HERO_DURATION - 0.56 }, 0.56)
+      // Refreshes can occur below the hero while these elements are hidden.
+      .fromTo('.hero-copy, .hero-side, .hero-bottom, .ball-ground', { opacity: 1, y: 0 },
+        { opacity: 0, y: -25, duration: 0.15 }, 0.08)
+      .to('.impact-flash', { opacity: 0.13, duration: 0.02 }, HERO_CONTACT_TIME)
+      .to('.impact-flash', { opacity: 0, duration: 0.055 }, HERO_CONTACT_TIME + 0.02);
+    if (mobile) {
+      let resizeFrame = 0;
+      const resize = () => {
+        cancelAnimationFrame(resizeFrame);
+        resizeFrame = requestAnimationFrame(() => ScrollTrigger.refresh());
+      };
+      window.addEventListener('resize', resize);
+      return () => { window.removeEventListener('resize', resize); cancelAnimationFrame(resizeFrame); };
+    }
   });
   return () => mm.revert();
 }

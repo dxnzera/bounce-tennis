@@ -23,8 +23,8 @@ export function useResponsive() {
   return mobile;
 }
 
-export function useInView(margin = '300px') {
-  const ref = useRef<HTMLDivElement>(null);
+export function useInView<T extends HTMLElement = HTMLDivElement>(margin = '300px') {
+  const ref = useRef<T>(null);
   const [near, setNear] = useState(false);
   const [visible, setVisible] = useState(false);
   useEffect(() => {

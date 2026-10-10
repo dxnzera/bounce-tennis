@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import gsap from 'gsap';
 import { animateHero, initialHeroMotion } from '@/lib/animations/hero';
@@ -11,25 +11,23 @@ export default function HeroExperience() {
   const ref = useRef<HTMLElement>(null);
   const motion = useRef(initialHeroMotion());
   const invalidate = useRef<() => void>(() => {});
-  const [loadRacket, setLoadRacket] = useState(false);
   const reduced = useReducedMotion();
   const onReady = useCallback((callback: () => void) => { invalidate.current = callback; callback(); }, []);
   useEffect(() => {
     if (!ref.current) return;
     const ctx = gsap.context(() => {
-      const cleanup = animateHero(ref.current!, motion.current, () => invalidate.current(), () => setLoadRacket(true));
+      const cleanup = animateHero(ref.current!, motion.current, () => invalidate.current());
       return cleanup;
     }, ref);
     return () => ctx.revert();
   }, [reduced]);
-  return <section className={`hero-experience ${reduced ? 'motion-reduced' : ''}`} id="inicio" ref={ref} aria-label="Introdução Bounce Tennis: role para acompanhar a rebatida">
+  return <section className="hero-experience" id="inicio" ref={ref} aria-label="Introdução Bounce Tennis: role para acompanhar a rebatida">
     <div className="hero-court" aria-hidden="true"><div className="court-inner" /><div className="court-center" /><div className="court-service" /></div>
-    <div className="hero-copy"><span className="eyebrow"><i /> EM QUADRA. DO SEU JEITO.</span><h1>PLAY IT<br /><em>DIFFERENT.</em></h1><p>O seu jogo começa aqui.</p></div>
+    <div className="hero-copy"><h1>PLAY IT<br /><em>DIFFERENT.</em></h1></div>
     <div className="hero-side"><span>BOUNCE TENNIS CLUB</span><span>EST. BRASIL</span><div className="mini-cross" aria-hidden="true">+</div></div>
-    <div className="hero-scene" role="img" aria-label="Bola de tênis 3D e uma raquete; o scroll controla a trajetória e a rebatida"><HeroCanvas motion={motion.current} loadRacket={loadRacket} onReady={onReady} /></div>
+    <div className="hero-scene" role="img" aria-label="Bola de tênis 3D e uma raquete; o scroll controla a trajetória e a rebatida"><HeroCanvas motion={motion.current} onReady={onReady} /></div>
     <div className="ball-ground" aria-hidden="true" />
-    <div className="hero-bottom"><span>TÊNIS / ESTILO / PERFORMANCE</span><a href="#raquetes" className="scroll-cue"><span className="scroll-cue-dot" /><span>ROLE PARA ENTRAR NO JOGO</span></a><span className="hero-coordinate">01 — THE FIRST SERVE</span></div>
+    <div className="hero-bottom"><span>TÊNIS / ESTILO / PERFORMANCE</span><a href="#raquetes" className="scroll-cue"><span className="scroll-cue-dot" /><span>ROLE PARA ENTRAR NO JOGO</span></a></div>
     <div className="impact-flash" aria-hidden="true" />
-    <div className="hero-reveal"><div className="reveal-court" aria-hidden="true" /><div className="hero-reveal-content"><span className="eyebrow light">BEM-VINDO À BOUNCE</span><h2>Uma nova forma<br />de viver <em>o tênis.</em></h2><p>Equipamentos selecionados para quem entende<br className="desktop-break" /> que o jogo também está no estilo.</p><a className="text-link" href="#raquetes">ENCONTRE SUA RAQUETE <span>03 MODELOS</span></a></div><span className="reveal-bottom">A QUADRA É SÓ O COMEÇO.</span></div>
   </section>;
 }
